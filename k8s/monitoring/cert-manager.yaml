@@ -1,0 +1,244 @@
+# ==============================================================================
+# cert-manager Configuration
+# ==============================================================================
+# This installs and configures cert-manager with Let's Encrypt issuers.
+# Use Helm for installation: helm install cert-manager jetstack/cert-manager
+# This file provides the ClusterIssuer resources for certificate management.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# cert-manager CRDs (installed via Helm, documented here)
+# helm install cert-manager jetstack/cert-manager \
+#   --namespace cert-manager \
+#   --create-namespace \
+#   --version v1.13.0 \
+#   --set installCRDs=true \
+#   --set prometheus.enabled=true \
+#   --set prometheus.servicemonitor.enabled=true
+# ------------------------------------------------------------------------------
+
+---
+# Let's Encrypt Staging Issuer
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: issuer
+    app.kubernetes.io/managed-by: cert-manager
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: devops@cloud-native-devops-platform.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+            serviceType: ClusterIP
+            podTemplate:
+              spec:
+                nodeSelector:
+                  kubernetes.io/os: linux
+                tolerations:
+                  - key: "node-role.kubernetes.io/control-plane"
+                    operator: "Exists"
+                    effect: "NoSchedule"
+      - dns01:
+          route53:
+            region: us-west-2
+            hostedZoneID: ""
+            # Use IRSA for authentication
+            # role: arn:aws:iam::ACCOUNT_ID:role/cert-manager-route53
+
+---
+# Let's Encrypt Production Issuer
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: issuer
+    app.kubernetes.io/managed-by: cert-manager
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: devops@cloud-native-devops-platform.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+            serviceType: ClusterIP
+            podTemplate:
+              spec:
+                nodeSelector:
+                  kubernetes.io/os: linux
+                tolerations:
+                  - key: "node-role.kubernetes.io/control-plane"
+                    operator: "Exists"
+                    effect: "NoSchedule"
+      - dns01:
+          route53:
+            region: us-west-2
+            hostedZoneID: ""
+
+---
+# Self-Signed Issuer (for internal certificates)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: issuer
+spec:
+  selfSigned: {}
+
+---
+# CA Issuer for internal service mesh mTLS
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ca-certificate
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: "cloud-native-devops-platform-ca"
+  secretName: ca-key-pair
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: ca-issuer
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/component: issuer
+spec:
+  ca:
+    secretName: ca-key-pair
+
+---
+# Certificate for internal services (example)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: internal-tls
+  namespace: apps
+spec:
+  secretName: internal-tls-secret
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+  commonName: "*.apps.svc.cluster.local"
+  dnsNames:
+    - "*.apps.svc.cluster.local"
+    - "*.apps.svc"
+    - "api-gateway.apps.svc.cluster.local"
+    - "api-gateway.apps"
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 2048
+
+---
+# Certificate for monitoring stack
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: monitoring-tls
+  namespace: monitoring
+spec:
+  secretName: monitoring-tls-secret
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+  commonName: "*.monitoring.svc.cluster.local"
+  dnsNames:
+    - "*.monitoring.svc.cluster.local"
+    - "prometheus.monitoring.svc.cluster.local"
+    - "grafana.monitoring.svc.cluster.local"
+    - "alertmanager.monitoring.svc.cluster.local"
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+
+---
+# PrometheusRules for cert-manager alerts
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cert-manager-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: cert-manager
+    prometheus: prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: cert-manager
+      rules:
+        - alert: CertificateExpiringSoon
+          expr: |
+            certmanager_certificate_expiration_timestamp_seconds - time() < 86400 * 7
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate {{ $labels.name }} expiring soon"
+            description: "Certificate {{ $labels.name }} in namespace {{ $labels.namespace }} expires in less than 7 days."
+
+        - alert: CertificateExpired
+          expr: |
+            certmanager_certificate_expiration_timestamp_seconds - time() < 0
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificate {{ $labels.name }} has expired"
+            description: "Certificate {{ $labels.name }} in namespace {{ $labels.namespace }} has expired."
+
+        - alert: CertificateNotReady
+          expr: |
+            certmanager_certificate_ready_status{condition="False"} == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificate {{ $labels.name }} is not ready"
+            description: "Certificate {{ $labels.name }} in namespace {{ $labels.namespace }} has been not ready for more than 15 minutes."
+
+        - alert: CertManagerIssuerError
+          expr: |
+            certmanager_issuer_ready_status{condition="False"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Issuer {{ $labels.name }} has errors"
+            description: "Issuer {{ $labels.name }} in namespace {{ $labels.namespace }} has been in error state for more than 15 minutes."
+
+        - alert: ACMEAccountRegistrationFailed
+          expr: |
+            increase(certmanager_acme_client_registration_count{status="error"}[1h]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ACME account registration failures detected"
+            description: "There have been ACME account registration failures in the last hour."
