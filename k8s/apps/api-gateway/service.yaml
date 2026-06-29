@@ -1,0 +1,43 @@
+# ==============================================================================
+# API Gateway Service
+# ==============================================================================
+# This service exposes the API Gateway deployment within the cluster.
+# It uses ClusterIP (not LoadBalancer) as traffic flows through Ingress.
+# ==============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: apps
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: backend-services
+  annotations:
+    # AWS Load Balancer Controller annotations (if using TargetGroupBinding)
+    alb.ingress.kubernetes.io/healthcheck-path: /health/ready
+    # Prometheus service discovery
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for direct pod access if needed
+  selector:
+    app.kubernetes.io/name: api-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: 8443
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+  sessionAffinity: None
+  publishNotReadyAddresses: false
