@@ -1,0 +1,139 @@
+# ==============================================================================
+# Namespace Definitions
+# ==============================================================================
+# This file defines all namespaces for the cluster with proper labels
+# and annotations for resource management and security.
+# ==============================================================================
+
+---
+# Default application namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
+  labels:
+    name: apps
+    environment: "{{ .Values.environment }}"
+    istio-injection: enabled
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    scheduler.alpha.kubernetes.io/defaultTolerations: '[]'
+
+---
+# Monitoring namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    name: monitoring
+    environment: "{{ .Values.environment }}"
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+  annotations:
+    description: "Monitoring stack - Prometheus, Grafana, AlertManager"
+
+---
+# Cert Manager namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    name: cert-manager
+    environment: "{{ .Values.environment }}"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# ArgoCD namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    name: argocd
+    environment: "{{ .Values.environment }}"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    description: "GitOps continuous delivery"
+
+---
+# Data services namespace (Redis, PostgreSQL clients)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data-services
+  labels:
+    name: data-services
+    environment: "{{ .Values.environment }}"
+    istio-injection: enabled
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# Ingress Nginx namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    name: ingress-nginx
+    environment: "{{ .Values.environment }}"
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+  annotations:
+    description: "Ingress Nginx Controller"
+
+---
+# Istio System namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels:
+    name: istio-system
+    environment: "{{ .Values.environment }}"
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+  annotations:
+    description: "Istio Service Mesh"
+
+---
+# Velero backup namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero
+  labels:
+    name: velero
+    environment: "{{ .Values.environment }}"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    description: "Cluster backup and disaster recovery"
+
+---
+# External Secrets namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: external-secrets
+  labels:
+    name: external-secrets
+    environment: "{{ .Values.environment }}"
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    description: "External Secrets Operator for AWS Secrets Manager"
