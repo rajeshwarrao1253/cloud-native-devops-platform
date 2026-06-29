@@ -1,0 +1,367 @@
+# ==============================================================================
+# Grafana Deployment
+# ==============================================================================
+# This deploys Grafana for metrics visualization with:
+# - Pre-configured Prometheus data source
+# - Persistent storage for dashboards
+# - OAuth/SSO integration ready
+# - Auto-sync dashboards from ConfigMaps
+# - Resource limits and security context
+# ==============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: visualization
+    app.kubernetes.io/part-of: monitoring
+    app.kubernetes.io/version: "10.1.0"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/component: visualization
+        app.kubernetes.io/part-of: monitoring
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: grafana
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.1.0
+          imagePullPolicy: IfNotPresent
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+
+          env:
+            - name: GF_SERVER_ROOT_URL
+              value: "https://grafana.cloud-native-devops-platform.com"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "false"
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: admin-password
+            - name: GF_SECURITY_ALLOW_EMBEDDING
+              value: "false"
+            - name: GF_SECURITY_ANGULAR_SUPPORT_ENABLED
+              value: "false"
+            - name: GF_AUTH_GENERIC_OAUTH_ENABLED
+              value: "true"
+            - name: GF_AUTH_GENERIC_OAUTH_NAME
+              value: "AWS SSO"
+            - name: GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP
+              value: "true"
+            - name: GF_AUTH_GENERIC_OAUTH_SCOPES
+              value: "openid profile email"
+            - name: GF_DATABASE_TYPE
+              value: "postgres"
+            - name: GF_DATABASE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: db-host
+            - name: GF_DATABASE_NAME
+              value: "grafana"
+            - name: GF_DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: db-user
+            - name: GF_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secrets
+                  key: db-password
+            - name: GF_DATABASE_SSL_MODE
+              value: "require"
+            - name: GF_INSTALL_PLUGINS
+              value: "grafana-clock-panel,grafana-simple-json-datasource"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: GF_LOG_MODE
+              value: "console"
+            - name: GF_LOG_LEVEL
+              value: "info"
+            - name: GF_LOG_FORMAT
+              value: "json"
+            - name: GF_ALERTING_ENABLED
+              value: "true"
+            - name: GF_UNIFIED_ALERTING_ENABLED
+              value: "true"
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: "var/lib/grafana/dashboards/cluster-overview.json"
+
+          volumeMounts:
+            - name: storage
+              mountPath: /var/lib/grafana
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-providers
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: grafana-storage
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-providers
+          configMap:
+            name: grafana-dashboard-providers
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
+
+---
+# PersistentVolumeClaim for Grafana storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-storage
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp3
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# ConfigMap for Prometheus data source
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: 15s
+          httpMethod: POST
+          manageAlerts: true
+          prometheusType: Prometheus
+          cacheLevel: High
+          disableRecordingRules: false
+          incrementalQuerying: true
+
+      - name: CloudWatch
+        type: cloudwatch
+        access: proxy
+        editable: true
+        jsonData:
+          authType: default
+          defaultRegion: us-west-2
+          assumeRoleArn: ""
+          externalId: ""
+          customMetricsNamespaces: "AWS/EKS,AWS/RDS,AWS/ApplicationELB"
+
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        editable: false
+        jsonData:
+          maxLines: 1000
+          derivedFields:
+            - name: TraceID
+              matcherRegex: '"trace_id":"([^"]+)"'
+              url: "$$${__value.raw}"
+              datasourceUid: tempo
+
+---
+# ConfigMap for dashboard provisioning
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-providers
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: true
+
+---
+# ConfigMap with pre-built dashboards
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+data:
+  cluster-overview.json: |
+    {
+      "dashboard": {
+        "title": "Cluster Overview",
+        "tags": ["kubernetes", "infrastructure"],
+        "timezone": "utc",
+        "panels": [
+          {
+            "title": "Node CPU Usage",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "avg(100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100))"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "title": "Node Memory Usage",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "avg(100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "title": "Pod Count by Namespace",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "count by (namespace) (kube_pod_info)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+          }
+        ]
+      }
+    }
+
+---
+# Service for Grafana
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: grafana
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3000"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+
+---
+# ServiceAccount for Grafana
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana
+  namespace: monitoring
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/cloud-native-devops-platform-grafana
