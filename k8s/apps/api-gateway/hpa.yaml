@@ -1,0 +1,110 @@
+# ==============================================================================
+# Horizontal Pod Autoscaler for API Gateway
+# ==============================================================================
+# This HPA automatically scales the API Gateway deployment based on:
+# - CPU utilization (target: 70%)
+# - Memory utilization (target: 80%)
+# - Custom metrics (requests per second) via Prometheus Adapter
+# Also includes a ScaledObject for KEDA-based event-driven scaling.
+# ==============================================================================
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway
+  namespace: apps
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: backend-services
+  annotations:
+    description: "HPA for API Gateway - scales based on CPU, memory, and custom metrics"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  minReplicas: 3
+  maxReplicas: 50
+  metrics:
+    # CPU-based scaling
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Memory-based scaling
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+    # Custom metric - requests per second per pod
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "1000"
+
+  # Behavior configuration for fine-tuned scaling
+  behavior:
+    # Scale up quickly
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 10
+          periodSeconds: 60
+      selectPolicy: Max
+
+    # Scale down slowly to prevent thrashing
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 120
+        - type: Pods
+          value: 5
+          periodSeconds: 120
+      selectPolicy: Min
+
+---
+# KEDA ScaledObject for event-driven scaling (optional enhancement)
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: api-gateway-keda
+#   namespace: apps
+# spec:
+#   scaleTargetRef:
+#     name: api-gateway
+#   minReplicaCount: 3
+#   maxReplicaCount: 50
+#   cooldownPeriod: 300
+#   pollingInterval: 15
+#   triggers:
+#     - type: prometheus
+#       metadata:
+#         serverAddress: http://prometheus.monitoring:9090
+#         metricName: http_requests_total
+#         threshold: "1000"
+#         query: |
+#           sum(rate(http_requests_total{service="api-gateway"}[2m]))
+#     - type: memory
+#       metadata:
+#         type: Utilization
+#         value: "80"
+#     - type: cpu
+#       metadata:
+#         type: Utilization
+#         value: "70"
