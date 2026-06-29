@@ -1,0 +1,128 @@
+# ==============================================================================
+# API Gateway Ingress
+# ==============================================================================
+# This ingress resource routes external traffic to the API Gateway service.
+# It uses cert-manager for automatic TLS certificate provisioning.
+# Annotations configure the AWS Load Balancer Controller.
+# ==============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway
+  namespace: apps
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: backend-services
+  annotations:
+    # Ingress class - use AWS Load Balancer Controller
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # SSL/TLS configuration
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:REGION:ACCOUNT_ID:certificate/CERTIFICATE_ID"
+    alb.ingress.kubernetes.io/ssl-policy: "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
+    # Health check configuration
+    alb.ingress.kubernetes.io/healthcheck-path: /health/ready
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
+    alb.ingress.kubernetes.io/success-codes: "200"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+
+    # Access logs
+    alb.ingress.kubernetes.io/load-balancer-attributes: |
+      access_logs.s3.enabled=true,
+      access_logs.s3.bucket=cloud-native-devops-platform-alb-logs,
+      access_logs.s3.prefix=api-gateway
+
+    # WAF
+    alb.ingress.kubernetes.io/wafv2-acl-arn: "arn:aws:wafv2:REGION:ACCOUNT_ID:regional/webacl/api-gateway/ID"
+
+    # Shield Advanced DDoS protection
+    alb.ingress.kubernetes.io/shield-advanced-protection: "true"
+
+    # Security group rules
+    alb.ingress.kubernetes.io/security-groups: "sg-xxxxxxxxxxxxxxxxx"
+    alb.ingress.kubernetes.io/manage-security-group-rules: "true"
+
+    # Group name - shared ALB across ingresses
+    alb.ingress.kubernetes.io/group.name: api-gateway
+    alb.ingress.kubernetes.io/group.order: "1"
+
+    # Tags
+    alb.ingress.kubernetes.io/tags: "Environment=production,Project=cloud-native-devops-platform"
+
+spec:
+  ingressClassName: alb
+  tls:
+    - hosts:
+        - api.cloud-native-devops-platform.com
+        - api-gateway.cloud-native-devops-platform.com
+      secretName: api-gateway-tls
+  rules:
+    - host: api.cloud-native-devops-platform.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 80
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 80
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 9090
+    - host: api-gateway.cloud-native-devops-platform.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 80
+
+---
+# Certificate for API Gateway (managed by cert-manager)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-gateway-tls
+  namespace: apps
+spec:
+  secretName: api-gateway-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - api.cloud-native-devops-platform.com
+    - api-gateway.cloud-native-devops-platform.com
+    - "*.api.cloud-native-devops-platform.com"
+  # Private key configuration
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 2048
+  # Duration and renewal
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days
+  usages:
+    - digital signature
+    - key encipherment
